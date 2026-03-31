@@ -1,0 +1,13 @@
+provider:
+  name: mock
+  model: mock-default
+  timeout: 60s
+
+cli:
+  color: auto
+  json_default: false
+  no_input: false
+
+logging:
+  level: info
+  redact_secrets: true

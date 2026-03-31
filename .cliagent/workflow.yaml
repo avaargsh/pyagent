@@ -1,0 +1,52 @@
+version: 1
+
+project:
+  delivery_mode: standard
+  output_language: zh-CN
+  current_version: ""
+  current_sprint: ""
+
+gate:
+  require_approval: true
+
+roles:
+  PM:
+    phase: P1
+    enabled: true
+    output: .ai/temp/requirement.md
+  Architect:
+    phase: P2
+    enabled: true
+    output: .ai/temp/architect.md
+  CLI:
+    phase: P3
+    enabled: true
+    output: .ai/temp/cli-spec.md
+  WBS:
+    phase: P4
+    enabled: true
+    output: .ai/temp/wbs.md
+  Package:
+    phase: P5a
+    enabled: true
+    output: .ai/temp/package-plan.md
+  Plan:
+    phase: P5b
+    enabled: true
+    output: .ai/temp/plan.md
+  Go:
+    phase: P6
+    enabled: true
+    output: .ai/records/go-engineer/
+  Review:
+    phase: P7
+    enabled: true
+    output: .ai/reports/review/review-report-{version}.md
+  QA:
+    phase: P8
+    enabled: true
+    output: .ai/reports/qa-report-{version}.md
+  Release:
+    phase: P9
+    enabled: true
+    output: .ai/reports/release/release-guide-{version}.md
