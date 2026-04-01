@@ -1,0 +1,6 @@
+policy:
+  id: high-risk-actions
+  mode: ask
+  reasons:
+    - send-email
+    - update-crm

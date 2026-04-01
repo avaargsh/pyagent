@@ -1,0 +1,12 @@
+employee:
+  id: outreach-specialist
+  display_name: Outreach Specialist
+  default_provider: mock
+  skill_packs:
+    - outbound-communication
+    - customer-reply
+  allowed_tools:
+    - send-email
+  knowledge_scopes:
+    - communication-playbook
+  approval_policy: high-risk-actions

@@ -1,0 +1,6 @@
+Effective configuration
+Profile: default
+Tenant: none
+Base URL: http://localhost:8000
+Providers: mock, openai
+Employees: outreach-specialist, sales-assistant

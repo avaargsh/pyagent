@@ -1,0 +1,12 @@
+employee:
+  id: sales-assistant
+  display_name: Sales Assistant
+  default_provider: mock
+  skill_packs:
+    - customer-followup
+  allowed_tools:
+    - knowledge-search
+    - send-email
+  knowledge_scopes:
+    - sales-playbook
+  approval_policy: high-risk-actions

@@ -1,0 +1,6 @@
+provider:
+  name: mock
+  model: mock-default
+  timeout_seconds: 5
+  max_output_tokens: 512
+  api_key_env: ""

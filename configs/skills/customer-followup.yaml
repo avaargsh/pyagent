@@ -1,0 +1,7 @@
+skill:
+  id: customer-followup
+  display_name: Customer Follow-Up
+  description: Generate a follow-up plan for an existing customer thread.
+  input_contract:
+    - customer_summary
+    - last_contact_at

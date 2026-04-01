@@ -1,406 +1,424 @@
-# cliagent 包结构契约
+# Python 数字员工平台包结构契约
 
-## 1. 文档范围与假设
+## 1. 文档范围与输入
 
-- 本文档基于 `docs/cliagent-go-design.md`、`.ai/temp/wbs.md` 与 `.ai/temp/plan.md` 编写，是当前仓库的 P5a 包结构契约。
-- 当前仓库尚未生成正式的 `.ai/temp/requirement.md`、`.ai/temp/architect.md`、`.ai/temp/cli-spec.md`，因此命令边界、非功能目标和输出约定暂以主设计稿为准。
-- v1.0 只覆盖主链路：`init/status/run/gate/config/doctor/version + mock/openai + dry-run + 状态一致性`。
-- `chat`、`pipeline`、`pattern` 管理、`anthropic`、`sqlite`、TUI、MCP 均不进入本包结构契约。
-- 默认不创建 `pkg/` 公共 API；若未来需要对外暴露稳定类型，再单独评估。
+- 本文档用于把当前仓库的包结构，对齐到 `.ai/temp/architect-optimized.md` 所定义的新架构。
+- 输入优先级：
+  - 第一优先：`.ai/temp/architect-optimized.md`
+  - 第二优先：`.ai/temp/architect.md`
+  - 第三优先：`.ai/temp/cli-spec.md`
+  - 第四优先：`.ai/temp/wbs.md`
+- 当前仓库仍缺少正式 `.ai/temp/requirement.md`，因此本契约只约束工程边界与迁移方向，不把当前假设提升为最终产品承诺。
+- 本契约是“从当前代码演进到新架构”的包结构约束，不是 greenfield 目录想象图。
+- 命名规则：
+  - Python 模块：`snake_case`
+  - 文档 / 配置：`kebab-case`
+  - 领域名词优先使用 `work_order / session / approval / artifact / event_ledger / runtime_cell`
 
-## 2. 推荐目录树
+## 2. 对齐结论
+
+- 新架构保留 `work-order` 作为一等业务对象，不引入 `workspace` 作为业务核心。
+- 新架构把当前项目从“大 `Deps` + 大 `TurnEngine` + 大 `work_order_use_cases`”收敛成三段式：
+  - `work-order` 业务模型
+  - `RuntimeCell / RuntimeManager` 运行时胶囊
+  - `EventLedger` 审计事实源
+- 当前包结构需要完成四个关键对齐：
+  - `application` 从 `use_cases` 中拆出 `commands` 和 `queries`
+  - `runtime` 从单一 `turn_engine.py` 拆成 `turn/` 回合流水线
+  - `providers / tools / policy` 成为平级资源服务，不再混在 runtime 和 use case 里
+  - `session + events` 从临时对象提升为 `projection + ledger` 双模型
+- 兼容策略：
+  - 允许 `application/use_cases/`、`runtime/turn_engine.py`、`application/services/request_context.py` 暂时保留
+  - 但这些旧入口只能作为 shim，最终要转发到新包边界，不再承载核心逻辑
+
+## 3. 目录树
+
+建议目录树如下：
 
 ```text
-cmd/
-└── cliagent/
-    └── main.go
-
-internal/
-├── cli/
-│   ├── root.go
-│   ├── common.go
-│   ├── init_cmd.go
-│   ├── status_cmd.go
-│   ├── run_cmd.go
-│   ├── gate_cmd.go
-│   ├── config_cmd.go
-│   ├── doctor_cmd.go
-│   └── version_cmd.go
-├── app/
-│   ├── bootstrap.go
-│   ├── types.go
-│   ├── init.go
-│   ├── status.go
-│   ├── run_role.go
-│   ├── gate.go
-│   ├── config.go
-│   ├── doctor.go
-│   ├── context_loader.go
-│   └── prompt_builder.go
-├── config/
-│   ├── model.go
-│   ├── loader.go
-│   └── validate.go
-├── workflow/
-│   ├── phase.go
-│   ├── role.go
-│   ├── registry.go
-│   ├── resolver.go
-│   ├── detector.go
-│   └── gatekeeper.go
-├── provider/
-│   ├── provider.go
-│   ├── message.go
-│   ├── factory.go
-│   ├── errors.go
-│   ├── redact.go
-│   ├── timeout.go
-│   ├── mock/
-│   │   └── mock.go
-│   └── openai/
-│       ├── client.go
-│       ├── request.go
-│       └── response.go
-├── workspace/
-│   ├── paths.go
-│   ├── scaffold.go
-│   └── files.go
-├── state/
-│   ├── model.go
-│   ├── store.go
-│   ├── file_store.go
-│   └── lock.go
-├── output/
-│   ├── model.go
-│   ├── printer.go
-│   ├── json.go
-│   ├── table.go
-│   └── errors.go
-└── version/
-    └── version.go
-
-testdata/
-├── fixtures/
-│   ├── init/
-│   ├── status/
-│   ├── run-dry-run/
-│   ├── run-mock/
-│   ├── doctor/
-│   └── release/
-└── golden/
-    ├── help-root.txt
-    ├── status-human.txt
-    ├── status-json.json
-    └── gate-list-json.json
+src/
+├── digital_employee/
+│   ├── __init__.py
+│   ├── api/
+│   │   ├── cli/
+│   │   ├── rest/
+│   │   ├── websocket/
+│   │   └── webhook/
+│   ├── application/
+│   │   ├── dto/
+│   │   ├── commands/
+│   │   ├── queries/
+│   │   └── services/
+│   ├── domain/
+│   │   └── runtime_constraints.py
+│   ├── contracts/
+│   ├── runtime/
+│   │   ├── manager.py
+│   │   ├── cell.py
+│   │   ├── coordinator_runtime.py
+│   │   ├── task_supervisor.py
+│   │   ├── session_runtime.py
+│   │   ├── budget.py
+│   │   ├── retry.py
+│   │   ├── lease.py
+│   │   └── turn/
+│   │       ├── engine.py
+│   │       ├── context_assembler.py
+│   │       ├── budget_controller.py
+│   │       ├── model_gateway.py
+│   │       ├── action_interpreter.py
+│   │       ├── session_recorder.py
+│   │       └── result_mapper.py
+│   ├── agents/
+│   ├── skills/
+│   ├── memory/
+│   ├── tools/
+│   │   ├── registry.py
+│   │   ├── executor.py
+│   │   ├── exposure.py
+│   │   ├── schemas.py
+│   │   ├── builtins/
+│   │   └── handlers/
+│   ├── providers/
+│   │   ├── catalog.py
+│   │   ├── factory.py
+│   │   ├── router.py
+│   │   ├── models.py
+│   │   ├── normalization.py
+│   │   └── adapters/
+│   ├── policy/
+│   │   ├── engine.py
+│   │   ├── approvals.py
+│   │   ├── redaction.py
+│   │   └── rules.py
+│   ├── integrations/
+│   ├── infra/
+│   │   ├── config/
+│   │   ├── db/
+│   │   ├── repositories/
+│   │   ├── queue/
+│   │   ├── locks/
+│   │   └── storage/
+│   ├── observability/
+│   │   ├── ledger.py
+│   │   ├── projections.py
+│   │   ├── replay.py
+│   │   ├── streaming.py
+│   │   ├── tracing.py
+│   │   └── logging.py
+│   └── bootstrap/
+│       ├── container.py
+│       └── factories.py
+└── digital_employee_sdk/
 ```
 
-补充约束：
+说明：
 
-- 不新增 `internal/role/` 独立包，角色定义并入 `internal/workflow/`。
-- 不新增 `internal/pattern/`；角色模板能力延后到 v1.1+。
-- `internal/workflow/` 只保留规则与映射，不承担文件 I/O。
+- 新增 `bootstrap/` 是本次对齐里唯一值得接受的顶层增量，因为 composition root 不属于 `application service`。
+- `application/use_cases/` 不再是目标形态；迁移期允许保留，但其职责只能是兼容转发。
+- `runtime/turn_engine.py` 不再是目标形态；迁移期允许保留，但其职责只能是对 `runtime/turn/engine.py` 的兼容包装。
 
-## 3. 每个包的职责
+## 4. 分层职责与依赖边界
 
 | 包 | 主要职责 | 允许依赖 | 禁止依赖 |
 |---|---|---|---|
-| `cmd/cliagent` | 进程入口、依赖组装、调用 `cli.Execute()` | `internal/cli` | 其他业务包 |
-| `internal/cli` | Cobra 命令定义、flags 解析、TTY 判断、Exit Code 映射、调用 `app` 与 `output` | `internal/app` `internal/output` `internal/version` | `provider` `workspace` `state` 的底层细节 |
-| `internal/app` | 单个用例编排；组合配置、工作流、Provider、状态、工作区；返回纯结果结构体 | `config` `workflow` `provider` `workspace` `state` | `cli`、直接终端渲染 |
-| `internal/config` | 运行配置与工作流配置模型、加载、合并、校验 | 标准库、YAML 解析 | `cli` `app` `state` |
-| `internal/workflow` | 阶段枚举、角色注册、交付物解析、Gate 规则、检测输入模型 | `config` 或纯内部类型 | `workspace` `state` `provider` |
-| `internal/provider` | 统一消息模型、Provider 接口、工厂、超时、脱敏、错误包装与具体实现 | 标准库 | `cli` `app` `workflow` |
-| `internal/workspace` | 路径解析、脚手架生成、文件读写、原子写入 | `config` | `cli` `output` `provider` |
-| `internal/state` | Gate 状态、执行账本、锁文件、状态持久化接口与文件实现 | `workflow` | `cli` `output` `provider` |
-| `internal/output` | human/json 渲染、稳定错误包裹、表格输出 | 标准库 | `app` 以外的业务依赖 |
-| `internal/version` | 版本信息、构建元数据 | 标准库 | 其他业务包 |
+| `api.cli` | 参数解析、TTY 行为、JSON/JSONL 输出、exit code 映射 | `application.commands` `application.queries` `application.dto` | 直接访问 repo / provider / tool handler |
+| `api.rest` | HTTP 路由、鉴权、请求校验、流式响应 | `application.commands` `application.queries` | 直接拼装 runtime 对象 |
+| `application.commands` | 状态变化型业务命令：create/run/cancel/resume/approve | `domain` `contracts` `application.services` | 直接依赖 CLI / REST / infra 具体实现 |
+| `application.queries` | 只读查询：get/list/tail/export/doctor view | `domain` `contracts` `application.services` | 直接写库或调用外部动作 |
+| `application.services` | orchestration facade、artifact service、approval facade | `runtime` `contracts` `observability` | CLI 表现层 |
+| `domain` | 业务实体、状态枚举、领域校验规则 | 无或极少基础库 | `infra` `api` |
+| `runtime.cell` | `RuntimeCell` 运行时胶囊 | `providers` `tools` `memory` `policy` `runtime.turn` | 直接依赖业务 repo |
+| `runtime.manager` | `RuntimeManager` 懒加载、热重载、生命周期 | `runtime.cell` `infra.config` | 业务用例逻辑 |
+| `runtime.turn` | 单回合执行流水线 | `providers` `tools` `memory` `policy` `observability` | CLI/HTTP、数据库方言 |
+| `runtime.task_supervisor` | 进程内任务监督、超时、取消 | 基础库 | 直接承载业务状态机 |
+| `tools.registry` | 工具定义注册与查询 | `tools.schemas` `domain` | 直接执行业务副作用 |
+| `tools.executor` | handler 调度、超时、重试、幂等包装 | `tools.registry` `integrations` `policy` | 业务编排 |
+| `providers.catalog` | provider/model 配置目录与槽位信息 | `infra.config` | 直接网络调用 |
+| `providers.router` | 回合级 provider/model 选择 | `providers.catalog` | policy / tool / repo |
+| `policy.engine` | `allow/ask/deny` 决策 | `domain` `infra.config` | API 展示、网络调用 |
+| `memory` | 记忆选择、摘要、预算裁剪、知识注入 | `integrations` `contracts` | 工具副作用 |
+| `observability.ledger` | append-only 事件账本写入 | `contracts` `infra.repositories` | 业务决策 |
+| `observability.projections` | 从账本投影 `work_order/session` 查询视图 | `contracts` `infra.repositories` | 执行动作 |
+| `infra.repositories` | snapshot / projection / ledger / artifact / approval 存储 | `domain` `contracts` | CLI/HTTP、provider |
+| `bootstrap` | composition root、工厂、依赖装配 | 全部内部包 | 业务规则 |
 
-依赖方向必须保持为：
+硬性约束：
 
-```text
-cmd -> cli -> app
-cli -> output, version
-app -> config, workflow, provider, workspace, state
-state -> workflow
-workflow/config/provider/workspace/output/version 彼此尽量平行，不反向依赖 app/cli
-```
+- `application` 不得直接 new `ProviderRouter`、`ToolRegistry`、`TaskSupervisor`。
+- `runtime.turn` 不得直接操作 `WorkOrderRepository`。
+- `ToolRegistry` 不得再内置具体外部系统副作用实现。
+- `PolicyEngine` 必须既参与“工具暴露前过滤”，也参与“执行前最终检查”。
+- `execution_mode / dispatch_mode / background_state / coordinator event type / coordination metadata key` 必须统一定义在 `domain/runtime_constraints.py`，不得在多个包重复声明。
 
-硬约束：
+## 5. 关键接口与结构体
 
-1. `cli` 只能做参数解析和结果展示，不能直接操作 `.ai/` 文件。
-2. `app` 是唯一允许同时依赖 `workflow + provider + workspace + state` 的层。
-3. `workflow` 只处理规则、阶段和角色映射；任何文件读取都在 `workspace` 或 `app` 完成。
-4. `provider` 通过接口隔离，`app` 只能依赖 `provider.Provider`，不能依赖具体实现包。
-5. `pkg/` 默认空置，避免为了未来扩展预埋公共 API。
+建议冻结以下关键结构：
 
-## 4. 关键接口与结构体
+### 5.1 Runtime
 
-### 4.1 关键接口归属
+`RuntimeCellKey`
 
-`internal/provider/provider.go`
+- `tenant: str | None`
+- `employee_id: str`
+- `config_version: str`
 
-```go
-type Provider interface {
-	Name() string
-	Chat(ctx context.Context, req ChatRequest) (*ChatResult, error)
-}
-```
+`RuntimeCell`
 
-说明：
+- `key: RuntimeCellKey`
+- `provider_catalog`
+- `provider_router`
+- `tool_registry`
+- `tool_executor`
+- `policy_engine`
+- `memory_manager`
+- `hook_dispatcher`
+- `turn_pipeline`
 
-- `StreamingProvider` 仅预留，不进入 v1.0 主链路。
-- `provider.Factory` 负责根据 `RuntimeConfig.Provider.Name` 返回 `mock` 或 `openai` 实例。
+`RuntimeManager`
 
-`internal/workspace/files.go`
+- `get_cell(key) -> RuntimeCell`
+- `reload_cell(key) -> None`
+- `invalidate_by_tenant(tenant) -> None`
+- `invalidate_by_employee(employee_id) -> None`
 
-```go
-type Workspace interface {
-	ProjectRoot() string
-	EnsureScaffold(ctx context.Context) error
-	ReadFile(ctx context.Context, path string) ([]byte, error)
-	WriteFileAtomic(ctx context.Context, path string, data []byte) error
-	FileExists(ctx context.Context, path string) (bool, error)
-}
-```
+### 5.2 Application
 
-说明：
+`WorkOrderCommandService`
 
-- `WriteFileAtomic` 是必须能力，不能下沉到调用方自己拼装临时文件逻辑。
+- `create_work_order()`
+- `run_work_order()`
+- `cancel_work_order()`
+- `resume_work_order()`
 
-`internal/state/store.go`
+`WorkOrderQueryService`
 
-```go
-type StateStore interface {
-	LoadGateState(ctx context.Context) (*GateState, error)
-	SaveGateState(ctx context.Context, state *GateState) error
-	AppendRun(ctx context.Context, record RunRecord) error
-	AppendGateAction(ctx context.Context, action GateAction) error
-	AcquirePhaseLock(ctx context.Context, phase workflow.Phase) (UnlockFunc, error)
-}
-```
+- `get_work_order()`
+- `list_work_orders()`
+- `list_artifacts()`
 
-说明：
+`SessionQueryService`
 
-- v1.0 只实现文件版 `StateStore`。
-- `AcquirePhaseLock` 返回释放函数，避免调用方直接操作锁文件。
+- `get_session()`
+- `list_sessions()`
+- `tail_session()`
+- `export_session()`
 
-### 4.2 关键结构体归属
+### 5.3 Event / Projection
 
-| 包 | 结构体 / 类型 | 用途 |
-|---|---|---|
-| `config` | `RuntimeConfig` | Provider、CLI、日志、超时等运行配置 |
-| `config` | `WorkflowConfig` | 角色到阶段映射、交付物路径、output language、delivery mode |
-| `config` | `RoleConfig` `ProjectConfig` `GateConfig` | 工作流细分模型 |
-| `workflow` | `Phase` | P1~P9 的强类型枚举 |
-| `workflow` | `RoleID` `RoleSpec` | 角色标识、别名、输出路径、启用状态 |
-| `workflow` | `Deliverable` `StatusSnapshot` | 阶段检测与状态表渲染所需的中间模型 |
-| `app` | `RunRoleRequest` `RunRoleResult` | `run` 用例的输入输出 |
-| `app` | `StatusResult` | `status` 用例返回的阶段、Gate、交付物摘要 |
-| `app` | `GateResult` | `gate approve|return|list` 返回结果 |
-| `app` | `DoctorResult` | `doctor` 的诊断结果、告警与建议 |
-| `provider` | `Message` `ChatRequest` `ChatResult` | Provider 无关的统一消息协议 |
-| `state` | `GateState` | 当前阶段、阶段审批状态、更新时间 |
-| `state` | `PhaseState` | 单阶段审批状态 |
-| `state` | `RunRecord` | 每次执行的账本记录 |
-| `state` | `GateAction` | `approve/return` 动作流水 |
-| `output` | `CommandResponse[T]` | 统一 JSON 包裹模型 |
-| `version` | `Info` | 版本、commit、build time 等元数据 |
+`LedgerEvent`
 
-### 4.3 包边界上的实现约束
+- `event_id`
+- `event_type`
+- `tenant`
+- `work_order_id`
+- `session_id`
+- `turn_index`
+- `ts`
+- `payload`
+- `trace_id`
+- `request_id`
 
-- `StatusResult`、`GateResult`、`DoctorResult` 由 `app` 输出纯数据结构，渲染由 `output` 完成。
-- `context_loader.go` 与 `prompt_builder.go` 归属 `internal/app`，因为它们既需要读取文件，又需要拼接业务上下文，不应放进 `workflow`。
-- `detector.go` 在 `workflow` 中只接收“已观测到的交付物状态”，不直接读文件系统。
+`WorkOrderSnapshot`
 
-## 5. 配置模型与状态模型
-
-### 5.1 配置模型
-
-`RuntimeConfig` 建议字段：
-
-```yaml
-provider:
-  name: mock
-  model: mock-default
-  timeout: 60s
-
-cli:
-  color: auto
-  json_default: false
-  no_input: false
-
-logging:
-  level: info
-  redact_secrets: true
-```
-
-`WorkflowConfig` 建议字段：
-
-```yaml
-version: 1
-project:
-  delivery_mode: standard
-  output_language: zh-CN
-  current_version: ""
-  current_sprint: ""
-gate:
-  require_approval: true
-roles:
-  PM:
-    phase: P1
-    enabled: true
-    output: .ai/temp/requirement.md
-```
-
-模型归属规则：
-
-1. 配置文件序列化模型只放在 `internal/config`。
-2. `.ai/context/*.md` 是角色上下文输入，不进入配置模型。
-3. 配置优先级固定为 `flag > env > project config > user config > default`。
-
-### 5.2 状态模型
-
-`GateState` 建议结构：
-
-```json
-{
-  "current_phase": "P2",
-  "last_action": "approve",
-  "updated_at": "2026-03-31T21:00:00+08:00",
-  "phases": {
-    "P1": "approved",
-    "P2": "pending"
-  }
-}
-```
-
-`RunRecord` 必须至少包含：
-
-- `run_id`
-- `role`
-- `phase`
-- `dry_run`
-- `input_summary`
-- `output_files`
-- `provider`
-- `model`
-- `started_at`
-- `ended_at`
+- `work_order_id`
+- `tenant`
+- `employee_id`
 - `status`
-- `error_code`
+- `current_step`
+- `last_session_id`
+- `output_summary`
+- `last_error`
+- `config_snapshot_id`
 
-`GateAction` 必须至少包含：
+`SessionProjection`
 
-- `phase`
-- `action`
-- `reason`
-- `actor`
-- `created_at`
+- `session_id`
+- `work_order_id`
+- `employee_id`
+- `status`
+- `current_stage`
+- `budget_used`
+- `budget_remaining`
+- `last_event_at`
 
-状态模型归属规则：
+### 5.4 Provider / Tool / Policy
 
-1. `gates.json` 存“当前事实”。
-2. `runs.jsonl` 与 `gate-actions.jsonl` 存“追加账本”。
-3. 锁状态只通过 `state` 包管理，调用方不能自行写 `.ai/state/locks/`。
+`ProviderCatalog`
 
-## 6. 测试桩、Mock、Golden 文件放置方式
+- `list_models()`
+- `resolve_slot(slot_name)`
 
-| 类型 | 放置位置 | 规则 |
-|---|---|---|
-| 单元测试 | 各包同目录 `*_test.go` | 优先测试包边界、错误路径、序列化与状态流转 |
-| 集成 Fixture | `testdata/fixtures/` | 每个子目录对应一个最小工作区场景，如 `init/`、`run-mock/`、`doctor/` |
-| Golden 文件 | `testdata/golden/` | 只存 CLI 可见稳定输出，如帮助文案、`status`、`gate list --json` |
-| 生产可用 Mock Provider | `internal/provider/mock/` | 既用于测试，也作为 v1.0 默认 provider |
-| 测试专用 Fake | 各包 `*_test.go` 内或同包测试辅助文件 | 不进入生产编译路径 |
+`ProviderRouter`
 
-具体约束：
+- `select_for_turn(profile, turn_context) -> ProviderBinding`
 
-1. Golden 只覆盖 `stdout` 稳定输出，不覆盖日志时间戳等不稳定字段。
-2. `Mock Provider` 是正式实现，不放在 `testdata/`。
-3. `StateStore`、`Workspace`、`Provider` 的临时 Fake 优先写在测试文件内，避免污染生产包接口。
-4. 集成测试最小链路固定为：`init -> status -> run PM -> gate approve -> doctor`。
+`ToolRegistry`
 
-## 7. 预计新增 / 修改文件列表
+- `register(definition)`
+- `require(name)`
+- `list_all()`
+- `filter_by_capabilities(...)`
 
-### A. 命令与应用层
+`ToolExecutor`
 
-- `cmd/cliagent/main.go`
-- `internal/cli/root.go`
-- `internal/cli/common.go`
-- `internal/cli/init_cmd.go`
-- `internal/cli/status_cmd.go`
-- `internal/cli/run_cmd.go`
-- `internal/cli/gate_cmd.go`
-- `internal/cli/config_cmd.go`
-- `internal/cli/doctor_cmd.go`
-- `internal/cli/version_cmd.go`
-- `internal/app/bootstrap.go`
-- `internal/app/types.go`
-- `internal/app/init.go`
-- `internal/app/status.go`
-- `internal/app/run_role.go`
-- `internal/app/gate.go`
-- `internal/app/config.go`
-- `internal/app/doctor.go`
-- `internal/app/context_loader.go`
-- `internal/app/prompt_builder.go`
+- `execute(tool_call, runtime_context) -> ToolObservation`
 
-### B. 配置、工作流、状态
+`PolicyEngine`
 
-- `internal/config/model.go`
-- `internal/config/loader.go`
-- `internal/config/validate.go`
-- `internal/workflow/phase.go`
-- `internal/workflow/role.go`
-- `internal/workflow/registry.go`
-- `internal/workflow/resolver.go`
-- `internal/workflow/detector.go`
-- `internal/workflow/gatekeeper.go`
-- `internal/workspace/paths.go`
-- `internal/workspace/scaffold.go`
-- `internal/workspace/files.go`
-- `internal/state/model.go`
-- `internal/state/store.go`
-- `internal/state/file_store.go`
-- `internal/state/lock.go`
+- `check_exposure(...) -> ExposureDecision`
+- `check_execution(...) -> ExecutionDecision`
 
-### C. Provider、输出与版本
+## 6. 配置模型与状态模型
 
-- `internal/provider/provider.go`
-- `internal/provider/message.go`
-- `internal/provider/factory.go`
-- `internal/provider/errors.go`
-- `internal/provider/redact.go`
-- `internal/provider/timeout.go`
-- `internal/provider/mock/mock.go`
-- `internal/provider/openai/client.go`
-- `internal/provider/openai/request.go`
-- `internal/provider/openai/response.go`
-- `internal/output/model.go`
-- `internal/output/printer.go`
-- `internal/output/json.go`
-- `internal/output/table.go`
-- `internal/output/errors.go`
-- `internal/version/version.go`
+配置模型建议拆成四层：
 
-### D. 测试与发布辅助
+1. `SystemConfig`
+   - runtime defaults
+   - queue / lease / timeout
+   - observability
+2. `TenantConfig`
+   - provider policy
+   - integration endpoints
+   - approval routing
+   - redaction policy
+3. `EmployeeProfileConfig`
+   - provider slot
+   - skill packs
+   - allowed tools
+   - knowledge scopes
+   - approval policy
+4. `RuntimeOverride`
+   - flag
+   - env
+   - request scoped override
 
-- `testdata/fixtures/init/`
-- `testdata/fixtures/status/`
-- `testdata/fixtures/run-dry-run/`
-- `testdata/fixtures/run-mock/`
-- `testdata/fixtures/doctor/`
-- `testdata/fixtures/release/`
-- `testdata/golden/help-root.txt`
-- `testdata/golden/status-human.txt`
-- `testdata/golden/status-json.json`
-- `testdata/golden/gate-list-json.json`
-- `.goreleaser.yml`
-- `.github/workflows/test.yml`
-- `.github/workflows/release.yml`
-- `scripts/verify-release.sh`
+状态模型建议固定成“两类持久化 + 一类运行态”：
 
-说明：
+- 持久化快照：
+  - `work_order_snapshot`
+  - `session_projection`
+  - `approval_record`
+  - `artifact_record`
+- 持久化事实源：
+  - `event_ledger`
+- 运行态：
+  - `runtime_cell`
+  - `task_handle`
+  - `lease_state`
 
-- `internal/output/model.go` 用于承载 `CommandResponse[T]`，不再在 `app` 层维护响应包裹结构。
-- `internal/app/context_loader.go` 与 `internal/app/prompt_builder.go` 取代先前放在 `workflow` 的草案位置，以保持领域层纯净。
+迁移要求：
+
+- 每个 `work_order` 必须记录 `tenant` 与 `config_snapshot_id`
+- `session_projection` 必须能在没有完整历史消息的情况下支持 `get/list/tail`
+- `event_ledger` 必须是 append-only，不允许原地覆盖
+
+## 7. 测试桩、Mock 与 Golden 放置方式
+
+- `tests/unit/`
+  - 领域对象
+  - runtime 子组件
+  - provider router / policy engine / tool exposure
+- `tests/integration/`
+  - CLI
+  - REST
+  - repository + projection
+  - background task flow
+- `tests/contract/`
+  - tool observation shape
+  - provider normalization shape
+  - event ledger schema
+- `tests/golden/cli/`
+  - `config show`
+  - `session tail --jsonl`
+  - `doctor --json`
+- `tests/fixtures/`
+  - configs
+  - work orders
+  - sessions
+  - ledger events
+  - provider responses
+- `tests/fakes/`
+  - fake provider
+  - fake tool executor
+  - fake ledger writer
+  - fake projection repo
+
+Mock 约束：
+
+- `ProviderRouter` 用 fake catalog + fake provider 验证
+- `RuntimeManager` 用 fake config version / fake runtime cell 验证
+- `ToolExecutor` 只 mock integration adapter，不 mock registry
+- `Command` 与 `Query` 测试优先使用 fake facade，不要再直接 patch 整个 composition root
+
+## 8. 迁移期兼容约束
+
+- `application/use_cases/*.py`
+  - 迁移期允许存在，但目标是薄 shim
+  - 禁止继续往里加核心逻辑
+- `runtime/turn_engine.py`
+  - 迁移期允许存在，最终仅保留向 `runtime/turn/engine.py` 的兼容入口
+- `application/services/request_context.py`
+  - 迁移期允许存在，最终仅保留向 `bootstrap/container.py` 的兼容包装
+- `Deps`
+  - 迁移期允许存在
+  - 但新代码优先依赖 `CommandService / QueryService / RuntimeManager`
+- `session + events` 双写期
+  - 在 `EventLedger` 落地前允许保留当前 `SessionRecord`
+  - 一旦 `EventLedger` 上线，projection 与 ledger 必须双写，直到查询面完全切换
+
+禁止事项：
+
+- 不再新增“第二个大容器对象”
+- 不再新增“第二个大 use case 文件”
+- 不再把具体 tool handler 塞回 `tools/registry.py`
+
+## 9. 预计新增 / 修改文件列表
+
+优先新增：
+
+- `src/digital_employee/bootstrap/container.py`
+- `src/digital_employee/bootstrap/factories.py`
+- `src/digital_employee/application/commands/work_order_commands.py`
+- `src/digital_employee/application/queries/work_order_queries.py`
+- `src/digital_employee/application/queries/session_queries.py`
+- `src/digital_employee/runtime/manager.py`
+- `src/digital_employee/runtime/cell.py`
+- `src/digital_employee/runtime/session_runtime.py`
+- `src/digital_employee/runtime/turn/engine.py`
+- `src/digital_employee/runtime/turn/context_assembler.py`
+- `src/digital_employee/runtime/turn/budget_controller.py`
+- `src/digital_employee/runtime/turn/model_gateway.py`
+- `src/digital_employee/runtime/turn/action_interpreter.py`
+- `src/digital_employee/runtime/turn/session_recorder.py`
+- `src/digital_employee/providers/catalog.py`
+- `src/digital_employee/providers/factory.py`
+- `src/digital_employee/tools/executor.py`
+- `src/digital_employee/policy/engine.py`
+- `src/digital_employee/observability/ledger.py`
+- `src/digital_employee/observability/projections.py`
+- `src/digital_employee/observability/replay.py`
+
+优先重构：
+
+- `src/digital_employee/application/use_cases/work_order_use_cases.py`
+- `src/digital_employee/application/use_cases/session_use_cases.py`
+- `src/digital_employee/application/services/request_context.py`
+- `src/digital_employee/application/services/deps.py`
+- `src/digital_employee/runtime/turn_engine.py`
+- `src/digital_employee/providers/router.py`
+- `src/digital_employee/tools/registry.py`
+- `src/digital_employee/infra/repositories/work_orders.py`
+- `src/digital_employee/infra/repositories/sessions.py`
+
+需要补齐但当前尚未成为主路径：
+
+- `src/digital_employee/policy/approvals.py`
+- `src/digital_employee/policy/redaction.py`
+- `src/digital_employee/infra/repositories/events.py`
+- `src/digital_employee/infra/repositories/approvals.py`
+- `src/digital_employee/api/rest/sessions.py`
+- `src/digital_employee/api/rest/tools.py`
+- `src/digital_employee/api/websocket/session_events.py`
+
+这份文件清单的目标不是“一次性全做完”，而是固定未来几轮重构的落点，避免继续在旧包边界上加功能。

@@ -1,0 +1,6 @@
+provider:
+  name: openai
+  model: gpt-5.4
+  timeout_seconds: 30
+  max_output_tokens: 4000
+  api_key_env: OPENAI_API_KEY

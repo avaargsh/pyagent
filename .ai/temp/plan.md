@@ -1,259 +1,366 @@
-# cliagent 技术方案
+# Python 数字员工平台技术方案
 
-## 1. 文档范围与假设
+## 1. 文档范围与输入
 
-- 本文档用于把 `docs/cliagent-go-design.md` 中的实施顺序映射为可直接执行的文件级实现计划。
-- 当前已存在 `.ai/temp/package-plan.md`，本文的目录边界、接口归属和文件映射以该契约为准。
-- 任务编号与 `.ai/temp/wbs.md` 保持一致；若后续 WBS 变更，Plan 必须同步刷新。
-- 文件清单以“首版建议新增文件”为主，后续允许按实现需要微调，但不得偏离主设计稿的分层边界。
+- 本文档用于把 `.ai/temp/architect-optimized.md` 与新版 `.ai/temp/package-plan.md` 映射为可执行的迁移路径。
+- 输入优先级：
+  - 第一优先：`.ai/temp/architect-optimized.md`
+  - 第二优先：`.ai/temp/package-plan.md`
+  - 第三优先：`.ai/temp/cli-spec.md`
+  - 第四优先：`.ai/temp/wbs.md`
+- 当前仓库仍缺少正式 `.ai/temp/requirement.md`，因此本文只定义“如何从当前代码演进到目标结构”，不补充未确认的产品能力。
+- 当前仓库已经存在一批 bootstrap 实现，所以本方案按“迁移式重构”制定，而不是按 greenfield 建设制定。
 
-## 2. 任务到文件清单映射
+## 2. 实施总原则
 
-### T1：根命令与子命令骨架
+- 先收紧边界，再扩能力。
+- 先改 composition root，再改应用层，再改 runtime。
+- 先双写和兼容，再删除旧入口。
+- 先打通单员工主链路，再引入协调器。
+- 所有结构性重构都要配套 integration tests，不能只依赖单测。
+- 所有运行时状态名和协调事件名都要先进入统一约束模块，再允许被 application/runtime/observability 引用。
 
-新增 / 修改文件：
+固定实施顺序：
 
-- `cmd/cliagent/main.go`
-- `internal/cli/root.go`
-- `internal/cli/common.go`
-- `internal/cli/init_cmd.go`
-- `internal/cli/status_cmd.go`
-- `internal/cli/run_cmd.go`
-- `internal/cli/gate_cmd.go`
-- `internal/cli/config_cmd.go`
-- `internal/cli/doctor_cmd.go`
-- `internal/cli/version_cmd.go`
-- `internal/app/bootstrap.go`
+1. 收紧 `Deps` 与 composition root
+2. 拆分 `commands / queries`
+3. 引入 `RuntimeCell / RuntimeManager`
+4. 拆 `TurnEngine` 为回合流水线
+5. 落 `EventLedger + Projection`
+6. 收紧 `Provider / Tool / Policy`
+7. 最后补 `CoordinatorRuntime`
 
-### T2：统一输出模型与错误码
+## 3. 迁移阶段与文件清单
 
-新增 / 修改文件：
+### A1：收紧 composition root 与依赖装配
 
-- `internal/app/types.go`
-- `internal/output/printer.go`
-- `internal/output/model.go`
-- `internal/output/json.go`
-- `internal/output/table.go`
-- `internal/output/errors.go`
+目标：
 
-### T3：Golden 基线
+- 让 `build_deps()` 不再直接成为所有业务代码的唯一入口
+- 把当前“读取配置 + 校验 + repo/provider/tool/runtime 装配”收进真正的 composition root
 
-新增 / 修改文件：
+新增文件：
 
-- `testdata/golden/help-root.txt`
-- `testdata/golden/status-human.txt`
-- `testdata/golden/status-json.json`
-- `testdata/golden/gate-list-json.json`
-- `internal/cli/root_test.go`
-- `internal/cli/status_cmd_test.go`
-- `internal/cli/gate_cmd_test.go`
+- `src/digital_employee/bootstrap/container.py`
+- `src/digital_employee/bootstrap/factories.py`
 
-### T4：配置模型、加载与校验
+修改文件：
 
-新增 / 修改文件：
+- `src/digital_employee/application/services/request_context.py`
+- `src/digital_employee/application/services/deps.py`
+- `src/digital_employee/api/cli/main.py`
+- `src/digital_employee/api/rest/deps.py`
 
-- `internal/config/model.go`
-- `internal/config/loader.go`
-- `internal/config/validate.go`
-- `internal/app/config.go`
-- `internal/config/loader_test.go`
-- `internal/config/validate_test.go`
+关键步骤：
 
-### T5：工作区脚手架与 `init`
+1. 在 `bootstrap/container.py` 中定义 `build_control_plane_container()`
+2. 把 repo / provider / tool / runtime 的构造函数下沉到 `bootstrap/factories.py`
+3. 让 CLI / REST 只拿 `CommandFacade` 与 `QueryFacade`
+4. 保留 `Deps` 作为兼容对象，但新代码不再直接依赖它
 
-新增 / 修改文件：
+验证重点：
 
-- `internal/workspace/paths.go`
-- `internal/workspace/scaffold.go`
-- `internal/workspace/files.go`
-- `internal/app/init.go`
-- `internal/cli/init_cmd_test.go`
-- `testdata/fixtures/init/`
+- CLI 主链路无行为回归
+- 配置错误、租户隔离、exit code 规则保持一致
 
-### T6：`status` 主链路
+### A2：拆分 application 为 commands / queries
 
-新增 / 修改文件：
+目标：
 
-- `internal/workflow/detector.go`
-- `internal/app/status.go`
-- `internal/output/table.go`
-- `internal/cli/status_cmd_test.go`
+- 把当前 `use_cases/*.py` 里的读写逻辑分离
+- 避免 `work_order_use_cases.py` 继续增长为协调器、artifact、background runner 的杂糅文件
 
-### T7：阶段、角色与路径解析
+新增文件：
 
-新增 / 修改文件：
+- `src/digital_employee/application/commands/work_order_commands.py`
+- `src/digital_employee/application/commands/approval_commands.py`
+- `src/digital_employee/application/queries/work_order_queries.py`
+- `src/digital_employee/application/queries/session_queries.py`
+- `src/digital_employee/application/queries/tool_queries.py`
 
-- `internal/workflow/phase.go`
-- `internal/workflow/role.go`
-- `internal/workflow/registry.go`
-- `internal/workflow/resolver.go`
-- `internal/workflow/phase_test.go`
-- `internal/workflow/registry_test.go`
+修改文件：
 
-### T8：状态存储、账本与锁
+- `src/digital_employee/application/use_cases/work_order_use_cases.py`
+- `src/digital_employee/application/use_cases/session_use_cases.py`
+- `src/digital_employee/application/use_cases/tool_use_cases.py`
+- `src/digital_employee/api/cli/work_order_cmd.py`
+- `src/digital_employee/api/cli/session_cmd.py`
+- `src/digital_employee/api/cli/tool_cmd.py`
 
-新增 / 修改文件：
+关键步骤：
 
-- `internal/state/model.go`
-- `internal/state/store.go`
-- `internal/state/file_store.go`
-- `internal/state/lock.go`
-- `internal/state/file_store_test.go`
-- `internal/state/lock_test.go`
+1. 把 `create/run/cancel/resume` 移到 `commands/`
+2. 把 `get/list/tail/export` 移到 `queries/`
+3. 旧 `use_cases/` 文件只保留向新服务的转发
+4. 统一由 `application/services/` 暴露 facade
 
-### T9：`gate approve|return|list`
+验证重点：
 
-新增 / 修改文件：
+- `work-order create|get|list|run`
+- `session get|list|tail`
+- CLI / REST 都不再直接依赖旧 `use_cases` 细节
 
-- `internal/app/gate.go`
-- `internal/cli/gate_cmd.go`
-- `internal/workflow/gatekeeper.go`
-- `internal/workflow/gatekeeper_test.go`
-- `internal/cli/gate_cmd_test.go`
+### A3：引入 RuntimeCell / RuntimeManager
 
-### T10：上下文装配与 `run --dry-run`
+目标：
 
-新增 / 修改文件：
+- 把“租户 + 员工画像 + 配置快照”级别的执行环境做成可缓存、可失效、可热重载的运行时胶囊
 
-- `internal/app/run_role.go`
-- `internal/app/context_loader.go`
-- `internal/app/prompt_builder.go`
-- `internal/app/run_role_test.go`
-- `testdata/fixtures/run-dry-run/`
+新增文件：
 
-### T11：Mock Provider 与 `run <role>`
+- `src/digital_employee/runtime/cell.py`
+- `src/digital_employee/runtime/manager.py`
+- `src/digital_employee/runtime/session_runtime.py`
 
-新增 / 修改文件：
+修改文件：
 
-- `internal/provider/provider.go`
-- `internal/provider/message.go`
-- `internal/provider/factory.go`
-- `internal/provider/mock/mock.go`
-- `internal/provider/mock/mock_test.go`
-- `internal/app/run_role.go`
-- `internal/cli/run_cmd_test.go`
-- `testdata/fixtures/run-mock/`
+- `src/digital_employee/application/services/deps.py`
+- `src/digital_employee/application/services/request_context.py`
+- `src/digital_employee/agents/assembler.py`
+- `src/digital_employee/providers/router.py`
+- `src/digital_employee/tools/registry.py`
 
-### T12：`doctor`
+关键步骤：
 
-新增 / 修改文件：
+1. 定义 `RuntimeCellKey(tenant, employee_id, config_version)`
+2. 在 `RuntimeCell` 中组装 provider/tool/policy/memory/hook/turn pipeline
+3. 用 `RuntimeManager.get_cell()` 取代“每个请求都重新拼一次 runtime”
+4. 为配置更新预留 `reload_cell()` 和失效钩子
 
-- `internal/app/doctor.go`
-- `internal/cli/doctor_cmd.go`
-- `internal/app/doctor_test.go`
-- `testdata/fixtures/doctor/`
+验证重点：
 
-### T13：OpenAI Provider
+- 同一租户和员工重复请求复用 cell
+- 不同租户不共享 runtime state
+- 配置版本变化会触发 cell 失效
 
-新增 / 修改文件：
+### A4：拆 TurnEngine 为回合流水线
 
-- `internal/provider/openai/client.go`
-- `internal/provider/openai/client_test.go`
-- `internal/provider/openai/request.go`
-- `internal/provider/openai/response.go`
+目标：
 
-### T14：脱敏、超时、错误策略
+- 把当前过重的 `runtime/turn_engine.py` 拆成可替换的回合组件
 
-新增 / 修改文件：
+新增文件：
 
-- `internal/provider/redact.go`
-- `internal/provider/errors.go`
-- `internal/provider/timeout.go`
-- `internal/output/errors.go`
-- `internal/provider/redact_test.go`
+- `src/digital_employee/runtime/turn/engine.py`
+- `src/digital_employee/runtime/turn/context_assembler.py`
+- `src/digital_employee/runtime/turn/budget_controller.py`
+- `src/digital_employee/runtime/turn/model_gateway.py`
+- `src/digital_employee/runtime/turn/action_interpreter.py`
+- `src/digital_employee/runtime/turn/session_recorder.py`
+- `src/digital_employee/runtime/turn/result_mapper.py`
 
-### T15：发布链
+修改文件：
 
-新增 / 修改文件：
+- `src/digital_employee/runtime/turn_engine.py`
+- `src/digital_employee/memory/context_compactor.py`
+- `src/digital_employee/tools/exposure.py`
+- `src/digital_employee/runtime/budget.py`
 
-- `.goreleaser.yml`
-- `.github/workflows/release.yml`
-- `.github/workflows/test.yml`
-- `docs/release.md`
+关键步骤：
 
-### T16：发布回归验证
+1. 保留现有 `TurnEngine.run()` 签名
+2. 把上下文准备、预算检查、工具暴露、模型调用、tool 解释、session/event 记录逐步抽离
+3. 让 `runtime/turn_engine.py` 最终仅转发到 `runtime/turn/engine.py`
+4. 把 `TaskSupervisor` 留在回合外，不继续侵入业务状态流转
 
-新增 / 修改文件：
+验证重点：
 
-- `scripts/verify-release.sh`
-- `testdata/fixtures/release/`
-- `.ai/reports/release/release-guide-template.md`
+- `tests/unit/runtime/test_turn_engine.py`
+- 工具调用回合
+- budget warning
+- context compaction
 
-## 3. 关键实现步骤
+### A5：落 EventLedger 与 Projection
 
-### 阶段 A：冻结协议与脚手架
+目标：
 
-1. 先完成 T1，固化命令树与参数面，避免后续测试和实现基线漂移。
-2. 并行推进 T4 和 T2，分别稳定配置来源和输出协议。
-3. 在 T4 完成后实现 T5，确保 `init` 生成的脚手架与配置模型一致。
-4. 基于 T1/T2/T4/T5 交付 T6，完成可机读的 `status`。
-5. 在命令面与输出协议稳定后完成 T3，固化 Golden 基线。
+- 把当前 `SessionRecord(session + events)` 升级为正式事实源和查询视图
 
-### 阶段 B：打通工作流主链路
+新增文件：
 
-1. 先做 T7，统一阶段、角色、交付物路径和角色别名映射。
-2. 再做 T8，保证状态、账本和阶段锁具备最小可恢复性。
-3. 基于 T7/T8 完成 T9，冻结 Gate 状态流转规则。
-4. 在状态模型稳定后做 T10，实现 `run --dry-run`、输入校验与上下文装配。
-5. 然后做 T11，用 Mock Provider 打通 `run <role>` 到交付物落盘的主链路。
-6. 最后完成 T12，让 `doctor` 负责一致性检查、迁移提示和损坏状态诊断。
+- `src/digital_employee/observability/ledger.py`
+- `src/digital_employee/observability/projections.py`
+- `src/digital_employee/observability/replay.py`
+- `src/digital_employee/infra/repositories/events.py`
+- `src/digital_employee/infra/repositories/projections.py`
 
-### 阶段 C：接入真实 Provider 与发布链
+修改文件：
 
-1. 在 Mock 主链路稳定后接入 T13，只实现最小 `Chat` 能力，不提前做流式能力。
-2. 通过 T14 收敛超时、错误包装和脱敏逻辑，确保真实调用安全可观测。
-3. 完成 T15，把构建、checksum、签名和 attestation 纳入 CI。
-4. 最后用 T16 建立发布前验证脚本和人工执行手册。
+- `src/digital_employee/domain/events.py`
+- `src/digital_employee/domain/session.py`
+- `src/digital_employee/application/queries/session_queries.py`
+- `src/digital_employee/application/commands/work_order_commands.py`
+- `src/digital_employee/infra/repositories/work_orders.py`
+- `src/digital_employee/infra/repositories/sessions.py`
+
+关键步骤：
+
+1. 定义统一 `LedgerEvent`
+2. `run_work_order()` 和 `TurnPipeline` 改成先写 ledger，再更新 projection
+3. 双写 `SessionRecord` 与 `EventLedger`，直到查询面迁移完成
+4. `session get/list/tail/export` 全部从 projection/ledger 读取
+5. 把 `coordination` 作为 `SessionProjection` 的正式字段，而不是只停留在 `session.metadata`
+
+验证重点：
+
+- 事件顺序稳定
+- session tail 能稳定输出 JSONL
+- 回放输入可从 ledger 还原
+
+### A6：收紧 Provider / Tool / Policy 三层边界
+
+目标：
+
+- 避免 provider、tool、policy 继续相互吞职责
+
+新增文件：
+
+- `src/digital_employee/providers/catalog.py`
+- `src/digital_employee/providers/factory.py`
+- `src/digital_employee/tools/executor.py`
+- `src/digital_employee/policy/engine.py`
+- `src/digital_employee/policy/approvals.py`
+- `src/digital_employee/policy/redaction.py`
+
+修改文件：
+
+- `src/digital_employee/providers/router.py`
+- `src/digital_employee/tools/registry.py`
+- `src/digital_employee/tools/handlers/*.py`
+- `src/digital_employee/runtime/turn/model_gateway.py`
+- `src/digital_employee/runtime/turn/action_interpreter.py`
+
+关键步骤：
+
+1. `ProviderCatalog` 只管理 provider/model 槽位元数据
+2. `ProviderRouter` 只负责选择，不负责实例生命周期
+3. `ToolRegistry` 只存定义，执行逻辑下沉到 `ToolExecutor`
+4. `PolicyEngine` 同时参与“工具暴露前过滤”和“执行前最终检查”
+
+验证重点：
+
+- deny 规则能在 tool exposure 前生效
+- approval_required 工具不会绕过 `PolicyEngine`
+- provider 切换不会影响 tool registry
+
+### A7：补 CoordinatorRuntime
+
+目标：
+
+- 为复杂工作单预留多员工协作能力，但不影响默认单员工主链路
+
+新增文件：
+
+- `src/digital_employee/runtime/coordinator_runtime.py`
+- `src/digital_employee/application/commands/coordinated_work_order_commands.py`
+
+修改文件：
+
+- `src/digital_employee/application/commands/work_order_commands.py`
+- `src/digital_employee/runtime/manager.py`
+- `src/digital_employee/agents/prompts.py`
+
+关键步骤：
+
+1. 默认仍走单员工路径
+2. 只有显式匹配复杂任务条件时才切到协调器
+3. 协调器只做任务拆分、员工选择、预算与聚合
+4. 工具执行仍由 worker employee runtime 完成
+5. `CoordinatorPlan`、`execution_mode`、`dispatch_mode`、`coordinator.*` 事件名全部引用统一约束模块
+
+验证重点：
+
+- 协调器不绕过审批
+- 子任务事件能回流到主工单账本
+- 失败回滚只影响对应子任务
 
 ## 4. 依赖顺序
 
-```text
-T1 -> T2 -> T3
-T4 -> T5 -> T6
-T4 -> T7 -> T8 -> T9
-T4 + T7 + T8 -> T10 -> T11 -> T12
-T11 -> T13 -> T14 -> T15 -> T16
-```
+必须按以下顺序推进：
 
-关键依赖说明：
+1. `A1 composition root`
+2. `A2 commands / queries`
+3. `A3 RuntimeCell / RuntimeManager`
+4. `A4 TurnPipeline`
+5. `A5 EventLedger / Projection`
+6. `A6 Provider / Tool / Policy`
+7. `A7 CoordinatorRuntime`
 
-- `T4` 是全局输入源依赖，没有配置模型就没有稳定的命令行为。
-- `T8` 是主链路的一致性依赖，`run/gate/doctor` 都不能绕过它。
-- `T11` 是真实 Provider 联调前的质量闸门，未通过不进入 `T13`。
+原因：
+
+- 没有 `A1`，后续所有边界都会继续耦合在 `Deps` 上
+- 没有 `A2`，应用层依旧会把读写和执行混在一起
+- 没有 `A3`，运行时就无法以“租户 + 员工 + 快照”作为稳定装配单位
+- 没有 `A5`，观察、回放、诊断永远没有统一事实源
+- `A7` 必须最后做，否则会在未稳定的单员工主链路上叠加复杂性
 
 ## 5. 风险点与回退方案
 
-| 风险点 | 影响 | 触发信号 | 回退方案 |
-|---|---|---|---|
-| 命令面过早变更 | Golden、大量测试和文档同步返工 | 子命令或 flags 高频改名 | 在 T1 完成后冻结命令面；新增命令一律延后到 v1.1+ |
-| 配置模型与脚手架不一致 | `init` 生成的工程无法被 `status/run` 正确解析 | 初始化后首次执行即报配置错误 | 以 `.cliagent/*.yaml` 模板为基线重放 `init`；禁止多套模板并存 |
-| 阶段检测和 Gate 状态冲突 | `status` 结果不可信 | 文件存在但 Gate 状态缺失或相反 | `status` 以 `gates.json` 为主，文件存在性作为一致性检查，不作为唯一事实源 |
-| 原子写入或锁实现不稳 | 交付物损坏、账本断裂、并发覆盖 | 中断后出现半写文件或陈旧锁 | 先用文件锁和临时文件实现最小正确性，不在 v1.0 引入 SQLite |
-| Prompt 装配失控 | token 成本和输出稳定性失控 | dry-run 输出过长或输入重复 | 优先路径引用和摘要，限制读取范围；超长输入直接报错 |
-| OpenAI Provider 联调不稳定 | 延迟 M3 | 认证失败、超时、响应解析错误频发 | 保持 Mock 为默认 provider；真实 provider 问题不阻塞主链路可发布性 |
-| 发布链接入过晚 | 首次发布手工步骤过多，可信链缺失 | 构建可跑但无 checksum/签名/attestation | 在 T15 前不宣布可发布版本；先补齐 CI 后再做版本打包 |
+### 风险 1：composition root 重构导致 CLI / REST 全面回归
 
-## 6. 优先测试清单
+- 回退方式：
+  - 保留旧 `build_deps()` 包装器
+  - 新旧 facade 并存一轮
 
-### P0：必须先补
+### 风险 2：TurnEngine 拆分过程中出现行为漂移
 
-1. 配置优先级测试：flag > env > project config > user config > default
-2. `status --json` schema 测试：字段名、布尔值和错误包裹稳定
-3. Gate 流转测试：approve/return/list 的合法与非法路径
-4. 原子写入测试：交付物和 `gates.json` 失败时不产生半写状态
-5. 阶段锁测试：重复执行同一阶段时能拒绝并给出可操作提示
-6. `run --dry-run` 测试：不调用 provider，但仍产生稳定摘要和账本记录
-7. Mock Provider 集成测试：`init -> status -> run PM -> gate approve -> doctor`
+- 回退方式：
+  - 保留 `runtime/turn_engine.py` 作为 golden wrapper
+  - 让新 `runtime/turn/engine.py` 在行为稳定前只作为内部实现
 
-### P1：进入真实 Provider 前补齐
+### 风险 3：EventLedger 上线后查询结果不一致
 
-1. OpenAI 认证失败与超时测试
-2. Provider 错误脱敏测试
-3. `doctor` 的陈旧锁、缺失账本、配置冲突诊断测试
-4. `gate list --json` 排序和时间戳稳定性测试
+- 回退方式：
+  - 维持 `session projection + SessionRecord` 双写
+  - `session get/list` 在一轮版本内保留旧 projection 读取路径
 
-### P2：发布前补齐
+### 风险 4：RuntimeCell 缓存导致租户隔离或配置刷新失效
 
-1. `goreleaser` 配置 smoke test
-2. checksum 生成与校验脚本测试
-3. 发布工作流 dry-run
+- 回退方式：
+  - 先把 `RuntimeManager` 放在内存实现
+  - 只在 cell key 和失效逻辑验证通过后再引入更复杂缓存策略
+
+### 风险 5：PolicyEngine 过晚落地导致工具边界再次变脏
+
+- 回退方式：
+  - 即使审批流未完成，也先把 `allow / ask / deny` 接口冻结
+  - 工具暴露和执行前检查统一走同一入口
+
+## 6. 需要优先补充的测试
+
+- `tests/integration/cli/test_error_handling.py`
+  - 配置错误、输入错误、未知错误协议
+- `tests/integration/cli/test_work_order_commands.py`
+  - create/get/list/run/cancel/resume
+- `tests/unit/runtime/test_turn_engine.py`
+  - 重构前作为行为基线
+- `tests/unit/runtime/test_runtime_manager.py`
+  - lazy load / invalidate / reload
+- `tests/unit/tools/test_exposure.py`
+  - deny-before-exposure
+- `tests/unit/policy/test_engine.py`
+  - allow/ask/deny
+- `tests/integration/session/test_tail_jsonl.py`
+  - projection + ledger
+- `tests/integration/work_orders/test_event_consistency.py`
+  - `work_order snapshot` 与 `event ledger` 一致性
+- `tests/integration/work_orders/test_tenant_runtime_isolation.py`
+  - RuntimeCell 租户隔离
+
+测试优先级：
+
+1. 协议不回归
+2. 租户和审批不越界
+3. 回合执行不漂移
+4. 事件事实源可回放
+
+## 7. 最终落地建议
+
+- 这次“对齐新架构”不建议一次性大改代码。
+- 最合理的落地方式是先完成 `A1 + A2 + A3`，把边界收紧；然后再做 `A4 + A5`，把执行平面和审计事实源稳定下来；最后才引入 `A6 + A7` 的治理和协调器增强。
+- 如果只能做最小闭环，优先做这三件事：
+  1. composition root 收敛
+  2. `work_order` 命令 / 查询拆分
+  3. `RuntimeCell` 引入
+
+完成这三步之后，当前项目就会从“bootstrap 代码堆叠”进入“可持续演进的执行平台”状态。
